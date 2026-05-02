@@ -6,7 +6,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import requests
-import yt_dlp
 
 
 INSTAGRAM_REFERER = "https://www.instagram.com/"
@@ -91,6 +90,22 @@ def extension_from_response(url: str, response: requests.Response) -> str:
     return ".bin"
 
 
+def unique_path(path: pathlib.Path) -> pathlib.Path:
+    if not path.exists():
+        return path
+
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    counter = 1
+
+    while True:
+        candidate = parent / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
 def resolve_output_path(url: str, output: Optional[str], response: requests.Response) -> pathlib.Path:
     if output:
         output_path = pathlib.Path(output)
@@ -99,7 +114,7 @@ def resolve_output_path(url: str, output: Optional[str], response: requests.Resp
         return output_path.with_suffix(extension_from_response(url, response))
 
     ext = extension_from_response(url, response)
-    return pathlib.Path(f"instagram_media{ext}")
+    return unique_path(pathlib.Path(f"instagram_media{ext}"))
 
 
 def download_direct_cdn(url: str, output: Optional[str] = None, headers: Optional[dict] = None, debug: bool = False) -> pathlib.Path:
@@ -158,15 +173,12 @@ def download_direct_cdn(url: str, output: Optional[str] = None, headers: Optiona
 
 
 def download_instagram_page(url: str, output: Optional[str] = None) -> None:
+    import yt_dlp
+
     output_path = pathlib.Path(output or "%(title).80s.%(ext)s")
 
-    if output:
-        outtmpl = str(output_path)
-    else:
-        outtmpl = str(output_path)
-
     ydl_opts = {
-        "outtmpl": outtmpl,
+        "outtmpl": str(output_path),
         "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "noplaylist": False,
