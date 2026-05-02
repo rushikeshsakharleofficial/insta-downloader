@@ -32,30 +32,30 @@ IMAGE_HEADERS = {
     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
 }
 
-SUPPORTED_HOST_SUFFIXES = (
-    ".fbcdn.net",
-    ".cdninstagram.com",
-)
-
 CONTENT_TYPE_EXTENSIONS = {
     "video/mp4": ".mp4",
+    "video/webm": ".webm",
     "image/jpeg": ".jpg",
     "image/jpg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
 }
 
-
-def is_instagram_cdn_url(url: str) -> bool:
-    host = urlparse(url).hostname or ""
-    return host == "cdninstagram.com" or host.endswith(SUPPORTED_HOST_SUFFIXES)
+MEDIA_EXTENSIONS = (
+    ".mp4",
+    ".webm",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+)
 
 
 def guess_media_kind(url: str) -> str:
     path = urlparse(url).path.lower()
-    if path.endswith(".mp4"):
+    if path.endswith((".mp4", ".webm")) or "/o1/" in path:
         return "video"
-    if path.endswith((".jpg", ".jpeg", ".png", ".webp")):
+    if path.endswith((".jpg", ".jpeg", ".png", ".webp")) or "/v/t51" in path:
         return "image"
     return "media"
 
@@ -78,32 +78,54 @@ def extension_from_response(url: str, response: requests.Response) -> str:
     if guessed:
         return guessed
 
-    suffix = pathlib.Path(urlparse(url).path).suffix
-    return suffix or ".bin"
+    suffix = pathlib.Path(urlparse(url).path).suffix.lower()
+    if suffix in MEDIA_EXTENSIONS:
+        return suffix
+
+    return ".bin"
 
 
 def resolve_output_path(url: str, output: Optional[str], response: requests.Response) -> pathlib.Path:
     if output:
-        return pathlib.Path(output)
+        output_path = pathlib.Path(output)
+        if output_path.suffix:
+            return output_path
+        return output_path.with_suffix(extension_from_response(url, response))
 
     ext = extension_from_response(url, response)
     return pathlib.Path(f"instagram_media{ext}")
 
 
-def download_file(url: str, output: Optional[str] = None, headers: Optional[dict] = None) -> pathlib.Path:
+def download_file(url: str, output: Optional[str] = None, headers: Optional[dict] = None, debug: bool = False) -> pathlib.Path:
     """Download a direct Instagram CDN media URL to disk."""
-    if not is_instagram_cdn_url(url):
-        raise ValueError("URL does not look like a common Instagram CDN URL")
-
     request_headers = headers_for_url(url)
     if headers:
         request_headers.update(headers)
 
+    if debug:
+        parsed = urlparse(url)
+        print(f"Host: {parsed.hostname}")
+        print(f"Detected kind: {guess_media_kind(url)}")
+
     with requests.get(url, headers=request_headers, stream=True, timeout=60) as response:
+        content_type = response.headers.get("content-type", "unknown")
+
+        if debug:
+            print(f"HTTP status: {response.status_code}")
+            print(f"Content-Type: {content_type}")
+            print(f"Content-Length: {response.headers.get('content-length', 'unknown')}")
+
         if response.status_code not in (200, 206):
             raise RuntimeError(
                 f"Download failed: HTTP {response.status_code}\n"
+                f"Content-Type: {content_type}\n"
                 f"Response: {response.text[:500]}"
+            )
+
+        if not (content_type.startswith("video/") or content_type.startswith("image/") or content_type == "application/octet-stream"):
+            raise RuntimeError(
+                f"Unsupported response content-type: {content_type}. "
+                "Make sure you pasted the full direct CDN media URL, not a post/reel/share URL."
             )
 
         output_path = resolve_output_path(url, output, response)
@@ -140,11 +162,12 @@ def main() -> int:
         default=None,
         help="Output filename. If omitted, extension is detected from response content-type.",
     )
+    parser.add_argument("--debug", action="store_true", help="Show request diagnostics")
 
     args = parser.parse_args()
 
     try:
-        download_file(args.url, args.output)
+        download_file(args.url, args.output, debug=args.debug)
         return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
