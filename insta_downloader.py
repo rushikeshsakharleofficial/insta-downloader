@@ -6,6 +6,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import requests
+import yt_dlp
 
 
 INSTAGRAM_REFERER = "https://www.instagram.com/"
@@ -49,6 +50,11 @@ MEDIA_EXTENSIONS = (
     ".png",
     ".webp",
 )
+
+
+def is_instagram_page_url(url: str) -> bool:
+    host = urlparse(url).hostname or ""
+    return host in {"instagram.com", "www.instagram.com"}
 
 
 def guess_media_kind(url: str) -> str:
@@ -96,7 +102,7 @@ def resolve_output_path(url: str, output: Optional[str], response: requests.Resp
     return pathlib.Path(f"instagram_media{ext}")
 
 
-def download_file(url: str, output: Optional[str] = None, headers: Optional[dict] = None, debug: bool = False) -> pathlib.Path:
+def download_direct_cdn(url: str, output: Optional[str] = None, headers: Optional[dict] = None, debug: bool = False) -> pathlib.Path:
     """Download a direct Instagram CDN media URL to disk."""
     request_headers = headers_for_url(url)
     if headers:
@@ -125,7 +131,7 @@ def download_file(url: str, output: Optional[str] = None, headers: Optional[dict
         if not (content_type.startswith("video/") or content_type.startswith("image/") or content_type == "application/octet-stream"):
             raise RuntimeError(
                 f"Unsupported response content-type: {content_type}. "
-                "Make sure you pasted the full direct CDN media URL, not a post/reel/share URL."
+                "This looks like a page URL, so use the normal command again after installing yt-dlp."
             )
 
         output_path = resolve_output_path(url, output, response)
@@ -151,23 +157,51 @@ def download_file(url: str, output: Optional[str] = None, headers: Optional[dict
     return output_path
 
 
+def download_instagram_page(url: str, output: Optional[str] = None) -> None:
+    output_path = pathlib.Path(output or "%(title).80s.%(ext)s")
+
+    if output:
+        outtmpl = str(output_path)
+    else:
+        outtmpl = str(output_path)
+
+    ydl_opts = {
+        "outtmpl": outtmpl,
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+        "noplaylist": False,
+        "quiet": False,
+        "no_warnings": False,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+
+def download(url: str, output: Optional[str] = None, debug: bool = False) -> None:
+    if is_instagram_page_url(url):
+        download_instagram_page(url, output)
+    else:
+        download_direct_cdn(url, output, debug=debug)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Download a direct Instagram CDN media URL, including videos and images."
+        description="Download Instagram media from a share URL or direct CDN media URL."
     )
-    parser.add_argument("url", help="Direct Instagram CDN media URL")
+    parser.add_argument("url", help="Instagram share URL or direct CDN media URL")
     parser.add_argument(
         "-o",
         "--output",
         default=None,
-        help="Output filename. If omitted, extension is detected from response content-type.",
+        help="Output filename. Example: video.mp4. If omitted, filename is auto-generated.",
     )
-    parser.add_argument("--debug", action="store_true", help="Show request diagnostics")
+    parser.add_argument("--debug", action="store_true", help="Show request diagnostics for direct CDN URLs")
 
     args = parser.parse_args()
 
     try:
-        download_file(args.url, args.output, debug=args.debug)
+        download(args.url, args.output, debug=args.debug)
         return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
